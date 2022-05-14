@@ -1,0 +1,145 @@
+Shader "Custom/Fenpon_Shader"
+{
+    Properties
+    {
+        _Color("Color",Color) = (1,1,1,1)
+        _MainTex("Main Texture", 2D) = "white" {}
+        _Outline_Bold("outline ",float) = 0.1
+        _LUT("LUT", 2D) = "white" {}
+        _Normal("Normal", 2D) = "black" {}
+        _rim_pow("Rim Pow",float) = 2
+        _Rim_Color("Rim Color", Color) = (1, 1, 1, 1)
+        _Able_Specular("Able_Specular",float) = 0 // gpu에 셰이더가 int를 보낼때 부동소수점으로 보냄
+            //bool은 지원하지않는다.
+        _Able_Rim("Able_Rim",float) = 0
+    }
+    SubShader
+    {
+        Tags { "RenderType"="Opaque" }
+        LOD 200
+        cull front
+        Pass{
+            CGPROGRAM
+            // Physically based Standard lighting model, and enable shadows on all light types
+            #pragma vertex vert
+            #pragma fragment frag
+            #include "UnityCG.cginc"
+            // Use shader model 3.0 target, to get nicer looking lighting
+
+           
+            struct vertexinfo
+            {
+                float4 vertex : POSITION;
+                float3 normal : NORMAL;
+            };
+
+            struct vertexoutput
+            {
+                float4 vertex : SV_POSITION;
+            };
+            float _Outline_Bold;
+            vertexoutput vert(vertexinfo ln)
+            {
+                vertexoutput _out;
+                float3 normalize_nor = normalize(ln.normal);//법선 벡터 정규화
+                float3 outline_pos = ln.vertex + normalize_nor * (_Outline_Bold * 0.1f); //법선벡터의 방향만큼 더해서 늘림
+
+                _out.vertex = UnityObjectToClipPos(outline_pos);
+                return _out;
+            }
+            float4 frag(vertexoutput i) : SV_Target //픽셀 셰이더 검정으로 설정
+            {
+                return 0.0f;
+            }
+            ENDCG
+        }
+
+        cull back
+        CGPROGRAM
+           #pragma surface surf  _MyLight    
+            //#pragma surface surf  Lambert  
+            sampler2D _MainTex;
+            sampler2D _LUT;
+            sampler2D _Normal;
+            float4 _Color;
+            float4 _Rim_Color;
+            
+            float _rim_pow;
+            float _Able_Specular;
+            float _Able_Rim;
+            struct Input {
+                float2 uv_MainTex;
+                float uv_band;
+                float3 viewDir;
+            };//이름 바꿀수없다 무조건 Input으로해야함
+
+            struct SurfaceOutputCustom {
+                fixed3 Albedo;
+                fixed3 Normal;
+                fixed3 Emission;
+                half Specular;
+                fixed Gloss;
+                fixed Alpha;
+
+                float3 BandLUT;
+            };
+            void  surf(Input ln, inout SurfaceOutputCustom o)
+            {
+                float4 fmaintex = tex2D(_MainTex,ln.uv_MainTex);
+                float4 fbandtex = tex2D(_LUT, ln.uv_band);
+
+                
+                //카메라 방향 벡터 == viewDir 랑 픽셀의 법선벡터를 
+                //내적해서 두 벡터의 각도를 가진 방향 벡터를 통해 바깥쪽에 가까운 픽셀인지를 판정한다,
+                //rim을 이용하여 툰 세이딩의 외각선을 만들수도있다.
+                if (_Able_Rim == 1.0f)
+                {
+                    float rim = dot(o.Normal, ln.viewDir);
+                    o.Emission = pow(1 - rim, _rim_pow) * _Rim_Color;
+                }
+                o.Albedo = fmaintex.rgb;
+                o.Alpha = 1.0f;
+                o.BandLUT = fbandtex.rgb;
+            }
+            
+            float4 Lighting_MyLight(SurfaceOutputCustom  s, float3 lightDir, float3 viewDir, float atten)
+            {
+                //Lighting+(함수이름)
+                float3 bandeddiffuse;
+                float hdotL = dot(s.Normal, lightDir) * 0.5f + 0.5f;
+                float bandnum = 3.0f;
+                //bandeddiffuse = ceil(hdotL* bandnum)/ bandnum;
+                bandeddiffuse = tex2D(_LUT,float2(hdotL,0.5f)).rgb;
+
+                float3 FSpecularColor;
+
+                float4 fFinColor;
+                if (_Able_Specular == 1.0f)
+                {
+
+
+                    float3 fHalfVector = normalize(lightDir + viewDir);//하프 Blinn-Phong Specular알고리즘 lightDir+ viewDir하고 정규화하고
+                    float3 fHDotn = saturate(dot(fHalfVector, s.Normal));//하프 Blinn-Phong Specular알고리즘 //내적해주면 스펙큘러계산됨
+                    //saturate -> 0과 1사이로 보정
+                    float fpow = pow(fHDotn, 500.0f);
+
+                    float fspecularsmooth = smoothstep(0.005f, 0.3f, fpow);//각지게 보간
+                    FSpecularColor = fspecularsmooth * 1.0f;
+ 
+                    //fFinalColor = float4(1,0,0,1);
+                    //_LightColor0 -> 가장 밝은 디렉셔널 라이트의 값 _LightColor1 -> 두번째로 밝은거 ... 4까지있음
+                    fFinColor.rgb = ((s.Albedo * _Color) + FSpecularColor) * bandeddiffuse * _LightColor0.rgb * atten; //최종 컬러
+                    fFinColor.a = s.Alpha;
+                }
+                else//스펙큘러 안쓰는 모드
+                {
+                    fFinColor.rgb = ((s.Albedo * _Color) ) * bandeddiffuse * _LightColor0.rgb * atten;
+                    fFinColor.a = s.Alpha;
+                }
+                return fFinColor;
+            }
+            
+        ENDCG
+    }
+    FallBack "Diffuse"
+}
